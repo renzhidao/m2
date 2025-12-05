@@ -1,17 +1,16 @@
 import { MSG_TYPE, NET_PARAMS } from './constants.js';
 
 export function init() {
-  console.log('📦 加载模块: P2P (Fixed)');
+  console.log('📦 加载模块: P2P (Fixed v2)');
   const CFG = window.config;
 
   window.p2p = {
     _searchLogShown: false,
     _waitLogShown: false,
+    _connecting: new Set(), // 连接锁
 
     start() {
-      if (window.state.peer && !window.state.peer.destroyed) {
-          return;
-      }
+      if (window.state.peer && !window.state.peer.destroyed) return;
 
       if (typeof Peer === 'undefined') {
           if (!this._waitLogShown) {
@@ -40,8 +39,6 @@ export function init() {
         p.on('connection', conn => this.setupConn(conn));
 
         p.on('error', e => {
-          
-          // === 自动修复：ID被占用 ===
           if (e.type === 'unavailable-id') {
              window.util.log('⚠️ ID冲突，正在自动更换...');
              const newId = 'u_' + Math.random().toString(36).substr(2, 9);
@@ -53,9 +50,8 @@ export function init() {
 
           if (e.type === 'peer-unavailable') return; 
           
-          // === 关键修改：后台假死不再重试，只记录 ===
           if (e.type === 'browser-incompatible') {
-             window.util.log('❌ [系统] WebRTC 引擎不可用 (可能处于后台)');
+             window.util.log('❌ [系统] WebRTC 引擎不可用');
              return;
           }
 
@@ -68,7 +64,6 @@ export function init() {
              return;
           }
 
-          // 其他网络错误，稍后重启
           if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(e.type)) {
              setTimeout(() => this.start(), 5000);
           }
@@ -78,37 +73,41 @@ export function init() {
       }
     },
 
-    // === 新增：彻底销毁方法 (用于后台休眠) ===
     stop() {
         if (window.state.peer) {
-            window.util.log('🛑 [系统] 应用切后台，暂停 P2P 服务');
+            window.util.log('🛑 [系统] 暂停 P2P 服务');
             try { window.state.peer.destroy(); } catch(e){}
             window.state.peer = null;
         }
-        // 清空连接池，防止僵尸对象
         window.state.conns = {};
+        this._connecting.clear(); // 清空锁
         if (window.ui) window.ui.updateSelf();
     },
 
-    // 主动连接别人
     connectTo(id) {
       if (!id || id === window.state.myId) return;
-      // 保护：如果 P2P 已销毁，禁止连接
       if (!window.state.peer || window.state.peer.destroyed) return;
       
+      // 已连接或正在连接，直接跳过
       if (window.state.conns[id] && window.state.conns[id].open) return;
+      if (this._connecting.has(id)) return;
+
+      this._connecting.add(id);
+
+      // 5秒后自动释放锁，防止死锁
+      setTimeout(() => this._connecting.delete(id), 5000);
 
       try {
         const conn = window.state.peer.connect(id, { reliable: true });
         conn.created = window.util.now();
-        window.state.conns[id] = conn; // 先占位
+        window.state.conns[id] = conn; 
         this.setupConn(conn);
-      } catch (e) { }
+      } catch (e) { 
+          this._connecting.delete(id);
+      }
     },
 
-    // 配置连接事件
     setupConn(conn) {
-      // 限制连接数
       const max = window.state.isHub ? NET_PARAMS.MAX_PEERS_HUB : NET_PARAMS.MAX_PEERS_NORMAL;
       if (Object.keys(window.state.conns).length >= max) {
         conn.on('open', () => {
@@ -119,21 +118,20 @@ export function init() {
       }
 
       conn.on('open', () => {
+        this._connecting.delete(conn.peer); // 连接成功，释放锁
+
         conn.lastPong = Date.now();
         conn.created = Date.now();
         window.state.conns[conn.peer] = conn;
         
-        window.util.log(`✅ [P2P] 建立连接成功: ${conn.peer} (Label: ${conn.label||'N/A'})`);
+        window.util.log(`✅ [P2P] 连接: ${conn.peer.slice(0, 6)}`);
         
-        // 握手
         const list = Object.keys(window.state.conns);
         list.push(window.state.myId);
         conn.send({ t: MSG_TYPE.HELLO, n: window.state.myName, id: window.state.myId });
         
-        // 交换节点
         setTimeout(() => { if (conn.open) conn.send({ t: MSG_TYPE.PEER_EX, list: list }); }, 100);
         
-        // 同步消息请求
         window.db.getRecent(1, 'all').then(m => {
             const lastTs = (m && m.length) ? m[0].ts : 0;
             setTimeout(() => {
@@ -141,7 +139,6 @@ export function init() {
             }, 500);
         });
 
-        // 触发UI更新和重试队列
         if (window.protocol) window.protocol.retryPending();
         if (window.ui) { window.ui.renderList(); window.ui.updateSelf(); }
       });
@@ -150,6 +147,7 @@ export function init() {
       
       const onGone = () => {
         const pid = conn.peer;
+        this._connecting.delete(pid); // 断开也释放锁
         delete window.state.conns[pid];
         if (window.ui) { window.ui.renderList(); window.ui.updateSelf(); }
       };
@@ -161,20 +159,18 @@ export function init() {
       conn.lastPong = Date.now();
       if (!d || !d.t) return;
 
-      // 基础协议处理
       if (d.t === MSG_TYPE.PING) { conn.send({ t: MSG_TYPE.PONG }); return; }
       if (d.t === MSG_TYPE.PONG) return;
       
       if (d.t === MSG_TYPE.HELLO) {
-        conn.label = d.n; // 给连接打标签
-        if (window.protocol) window.protocol.processIncoming({ senderId: d.id, n: d.n }); // 借用 processIncoming 更新联系人
+        conn.label = d.n; 
+        if (window.protocol) window.protocol.processIncoming({ senderId: d.id, n: d.n });
         return;
       }
 
       if (d.t === MSG_TYPE.PEER_EX && Array.isArray(d.list)) {
         d.list.forEach(id => {
            if (id && id !== window.state.myId && !window.state.conns[id]) {
-             // 只有连接数不满时才去连新推荐的节点
              if (Object.keys(window.state.conns).length < NET_PARAMS.MAX_PEERS_NORMAL) {
                this.connectTo(id);
              }
@@ -183,7 +179,6 @@ export function init() {
         return;
       }
       
-      // 历史消息请求与响应
       if (d.t === MSG_TYPE.ASK_PUB) {
          window.db.getPublicAfter(d.ts || 0).then(list => {
              if (list.length > 0) conn.send({t: MSG_TYPE.REP_PUB, list: list});
@@ -197,17 +192,13 @@ export function init() {
           return;
       }
 
-      // 普通消息
       if (d.t === MSG_TYPE.MSG) {
         if (window.protocol) window.protocol.processIncoming(d, conn.peer);
       }
     },
 
-    // 巡逻所有房主
     patrolHubs() {
-      // 保护：如果 P2P 已销毁，不执行巡逻
       if (!window.state.peer || window.state.peer.destroyed) return;
-
       for (let i = 0; i < NET_PARAMS.HUB_COUNT; i++) {
         const targetId = NET_PARAMS.HUB_PREFIX + i;
         if (!window.state.conns[targetId] || !window.state.conns[targetId].open) {
@@ -216,21 +207,16 @@ export function init() {
       }
     },
 
-    // 维护：心跳与清理
     maintenance() {
-      // 保护：如果 P2P 已销毁，停止维护
       if (!window.state.peer || window.state.peer.destroyed) return;
 
       const now = Date.now();
-      
-      // 清理
       Object.keys(window.state.conns).forEach(pid => {
         const c = window.state.conns[pid];
         if (!c.open && now - (c.created || 0) > NET_PARAMS.CONN_TIMEOUT) {
            delete window.state.conns[pid];
         }
         if (c.open && c.lastPong && (now - c.lastPong > NET_PARAMS.PING_TIMEOUT)) {
-           // 不主动断开房主，除非超时很久
            if (!pid.startsWith(NET_PARAMS.HUB_PREFIX)) {
                c.close();
                delete window.state.conns[pid];
@@ -238,13 +224,12 @@ export function init() {
         }
       });
 
-      // 随机交换节点 (Gossip)
       const all = Object.keys(window.state.conns);
       if (all.length > 0) {
          const pkt = { t: MSG_TYPE.PEER_EX, list: all.slice(0, NET_PARAMS.GOSSIP_SIZE) };
          Object.values(window.state.conns).forEach(c => {
              if (c.open) {
-                 c.send({ t: MSG_TYPE.PING }); // 顺便发送Ping
+                 c.send({ t: MSG_TYPE.PING }); 
                  c.send(pkt);
              }
          });
