@@ -1,7 +1,7 @@
 import { MSG_TYPE, NET_PARAMS, UI_CONFIG } from './constants.js';
 
 export function init() {
-  console.log('📦 加载模块: MQTT (Fixed v2)');
+  console.log('📦 加载模块: MQTT (Fixed v3)');
 
   const CFG = window.config;
 
@@ -11,7 +11,6 @@ export function init() {
     _pulseTimer: null,
 
     start() {
-      // 防止重复启动
       if (this.client && this.client.isConnected()) return;
 
       if (typeof Paho === 'undefined') {
@@ -20,14 +19,13 @@ export function init() {
         return;
       }
 
-      // 决定连接参数 (支持失败自动切换代理)
       let host = CFG.mqtt.broker;
       let port = Number(CFG.mqtt.port);
       let path = CFG.mqtt.path;
       let isProxy = false;
 
       if (this.failCount > 0) {
-        window.util.log(`🛡️ MQTT直连失败，切换代理`);
+        window.util.log(`️ MQTT直连失败，切换代理`);
         host = CFG.mqtt.proxy_host;
         port = 443;
         path = `/https://${CFG.mqtt.broker}:${CFG.mqtt.port}${CFG.mqtt.path}`;
@@ -57,7 +55,6 @@ export function init() {
       }
     },
 
-    // === 新增：彻底停止 ===
     stop() {
         if (this._pulseTimer) {
             clearInterval(this._pulseTimer);
@@ -89,7 +86,6 @@ export function init() {
         if (window.p2p) window.p2p.patrolHubs();
       }
 
-      // 发送上线广播
       this.sendPresence();
       if (this._pulseTimer) clearInterval(this._pulseTimer);
       this._pulseTimer = setInterval(() => this.sendPresence(), isProxy ? 10000 : 4000);
@@ -105,7 +101,6 @@ export function init() {
     },
 
     onLost(res) {
-      // 如果是 code 0，说明是主动断开(调用了stop)，忽略
       if (res.errorCode === 0) return;
 
       window.state.mqttStatus = '断开';
@@ -138,6 +133,9 @@ export function init() {
     },
 
     sendPresence() {
+      // === 关键修复：后台时不发送心跳，静默保活 ===
+      if (document.hidden) return;
+
       if (!this.client || !this.client.isConnected()) return;
 
       let payload;

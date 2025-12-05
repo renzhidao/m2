@@ -36,34 +36,37 @@ export function init() {
     bindLifecycle() {
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
-                // 切后台：停止所有服务
-                window.util.log('🌙 应用切入后台，暂停所有服务...');
+                // === 切后台：只暂停逻辑循环，保持连接（利用系统宽容期） ===
+                window.util.log('🌙 应用切入后台 (静默模式)...');
                 
-                // 1. 停止 P2P
-                if (window.p2p && window.p2p.stop) window.p2p.stop();
-
-                // 2. 停止 MQTT (关键修复)
-                if (window.mqtt && window.mqtt.stop) window.mqtt.stop();
-                
-                // 3. 暂停主循环
                 if (this.loopTimer) {
                     clearInterval(this.loopTimer);
                     this.loopTimer = null;
                 }
                 
             } else {
-                // 切前台：恢复所有服务
-                window.util.log('☀️ 应用切回前台，正在恢复服务...');
+                // === 切前台：恢复逻辑，检查连接 ===
+                window.util.log('☀️ 应用切回前台...');
                 
                 if (!this.loopTimer) {
                     this.loopTimer = setInterval(() => this.loop(), NET_PARAMS.LOOP_INTERVAL);
                 }
                 
-                // 重启 P2P
-                if (window.p2p) window.p2p.start();
+                // 检查 P2P 是否存活，只有死了才重启
+                if (window.p2p) {
+                    if (!window.state.peer || window.state.peer.destroyed || window.state.peer.disconnected) {
+                        window.util.log('🔧 P2P 连接已失效，正在恢复...');
+                        window.p2p.start();
+                    }
+                }
                 
-                // 重启 MQTT
-                if (window.mqtt) window.mqtt.start();
+                // 检查 MQTT
+                if (window.mqtt) {
+                     if (!window.mqtt.client || !window.mqtt.client.isConnected()) {
+                         window.util.log('🔧 MQTT 连接已断开，正在重连...');
+                         window.mqtt.start();
+                     }
+                }
                 
                 window.util.syncTime();
             }
