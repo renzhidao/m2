@@ -2,7 +2,10 @@ export function init() {
   console.log('📦 加载模块: Utils');
 
   window.logSystem = {
+    fullHistory: [],
     add(text) {
+      if(this.fullHistory) this.fullHistory.push(`[${new Date().toLocaleTimeString()}] ${typeof text==='object'?JSON.stringify(text):text}`);
+      if (typeof text === 'object') text = JSON.stringify(text);
       const ts = window.util ? window.util.now() : Date.now();
       const msg = `[${new Date(ts).toLocaleTimeString()}] ${text}`;
       console.log(msg);

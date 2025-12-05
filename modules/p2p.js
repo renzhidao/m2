@@ -1,16 +1,29 @@
 import { MSG_TYPE, NET_PARAMS } from './constants.js';
 
 export function init() {
-  console.log('📦 加载模块: P2P');
+  console.log('📦 加载模块: P2P (Fixed)');
   const CFG = window.config;
 
   window.p2p = {
     _searchLogShown: false,
+    _waitLogShown: false,
 
     start() {
-      if (window.state.peer && !window.state.peer.destroyed) return;
-      window.util.log(`启动 P2P...`);
+      if (window.state.peer && !window.state.peer.destroyed) {
+          return;
+      }
 
+      if (typeof Peer === 'undefined') {
+          if (!this._waitLogShown) {
+              window.util.log('[P2P] ⏳ Peer库未就绪，开始等待...');
+              this._waitLogShown = true;
+          }
+          setTimeout(() => this.start(), 200);
+          return;
+      }
+
+      window.util.log(`[P2P] 🚀 正在启动... ID: ${window.state.myId}`);
+      
       try {
         const p = new Peer(window.state.myId, CFG.peer);
 
@@ -21,18 +34,28 @@ export function init() {
           window.util.log(`✅ 就绪: ${id.slice(0, 6)}`);
           
           if (window.ui) window.ui.updateSelf();
-          
-          // 启动后尝试连接所有已知房主
           this.patrolHubs();
         });
 
         p.on('connection', conn => this.setupConn(conn));
 
         p.on('error', e => {
-          if (e.type === 'peer-unavailable') return; // 常见错误，忽略
           
+          // === 自动修复：ID被占用 ===
+          if (e.type === 'unavailable-id') {
+             window.util.log('⚠️ ID冲突，正在自动更换...');
+             const newId = 'u_' + Math.random().toString(36).substr(2, 9);
+             localStorage.setItem('p1_my_id', newId);
+             window.state.myId = newId;
+             location.reload(); 
+             return;
+          }
+
+          if (e.type === 'peer-unavailable') return; 
+          
+          // === 关键修改：后台假死不再重试，只记录 ===
           if (e.type === 'browser-incompatible') {
-             alert('您的浏览器不支持 P2P (WebRTC)。请更换 Chrome/Edge。');
+             window.util.log('❌ [系统] WebRTC 引擎不可用 (可能处于后台)');
              return;
           }
 
@@ -55,9 +78,24 @@ export function init() {
       }
     },
 
+    // === 新增：彻底销毁方法 (用于后台休眠) ===
+    stop() {
+        if (window.state.peer) {
+            window.util.log('🛑 [系统] 应用切后台，暂停 P2P 服务');
+            try { window.state.peer.destroy(); } catch(e){}
+            window.state.peer = null;
+        }
+        // 清空连接池，防止僵尸对象
+        window.state.conns = {};
+        if (window.ui) window.ui.updateSelf();
+    },
+
     // 主动连接别人
     connectTo(id) {
       if (!id || id === window.state.myId) return;
+      // 保护：如果 P2P 已销毁，禁止连接
+      if (!window.state.peer || window.state.peer.destroyed) return;
+      
       if (window.state.conns[id] && window.state.conns[id].open) return;
 
       try {
@@ -73,7 +111,6 @@ export function init() {
       // 限制连接数
       const max = window.state.isHub ? NET_PARAMS.MAX_PEERS_HUB : NET_PARAMS.MAX_PEERS_NORMAL;
       if (Object.keys(window.state.conns).length >= max) {
-        // 连接满了，交换一下邻居列表后礼貌挂断
         conn.on('open', () => {
           conn.send({ t: MSG_TYPE.PEER_EX, list: Object.keys(window.state.conns).slice(0, 10) });
           setTimeout(() => conn.close(), 500);
@@ -86,7 +123,7 @@ export function init() {
         conn.created = Date.now();
         window.state.conns[conn.peer] = conn;
         
-        window.util.log(`🔗 连接: ${conn.peer.slice(0, 6)}`);
+        window.util.log(`✅ [P2P] 建立连接成功: ${conn.peer} (Label: ${conn.label||'N/A'})`);
         
         // 握手
         const list = Object.keys(window.state.conns);
@@ -106,7 +143,7 @@ export function init() {
 
         // 触发UI更新和重试队列
         if (window.protocol) window.protocol.retryPending();
-        if (window.ui) window.ui.renderList();
+        if (window.ui) { window.ui.renderList(); window.ui.updateSelf(); }
       });
 
       conn.on('data', d => this.handleData(d, conn));
@@ -114,7 +151,7 @@ export function init() {
       const onGone = () => {
         const pid = conn.peer;
         delete window.state.conns[pid];
-        if (window.ui) window.ui.renderList();
+        if (window.ui) { window.ui.renderList(); window.ui.updateSelf(); }
       };
       conn.on('close', onGone);
       conn.on('error', onGone);
@@ -168,6 +205,9 @@ export function init() {
 
     // 巡逻所有房主
     patrolHubs() {
+      // 保护：如果 P2P 已销毁，不执行巡逻
+      if (!window.state.peer || window.state.peer.destroyed) return;
+
       for (let i = 0; i < NET_PARAMS.HUB_COUNT; i++) {
         const targetId = NET_PARAMS.HUB_PREFIX + i;
         if (!window.state.conns[targetId] || !window.state.conns[targetId].open) {
@@ -178,6 +218,9 @@ export function init() {
 
     // 维护：心跳与清理
     maintenance() {
+      // 保护：如果 P2P 已销毁，停止维护
+      if (!window.state.peer || window.state.peer.destroyed) return;
+
       const now = Date.now();
       
       // 清理
@@ -207,7 +250,7 @@ export function init() {
          });
       }
       
-      if (window.ui) window.ui.renderList();
+      if (window.ui) { window.ui.renderList(); window.ui.updateSelf(); }
     }
   };
 }

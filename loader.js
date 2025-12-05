@@ -37,7 +37,7 @@ async function boot() {
 
     // 3. 逐个加载模块并执行初始化
     for (const mod of modules) {
-        const path = `./modules/${mod}.js`;
+        const path = `./modules/${mod}.js?t=` + Date.now();
         try {
             // === 关键修复：获取模块对象并调用 init ===
             const m = await import(path);

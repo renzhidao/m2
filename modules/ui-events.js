@@ -13,14 +13,12 @@ export function init() {
     },
 
     injectStyles() {
-      const css = `
-        .file-card { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 8px; min-width: 200px; }
-        .file-icon { font-size: 24px; }
-        .file-info { flex: 1; min-width: 0; }
-        .file-name { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .file-size { font-size: 11px; opacity: 0.7; }
-        .file-dl-btn { text-decoration: none; color: white; font-weight: bold; padding: 4px 8px; background: #2a7cff; border-radius: 4px; font-size: 12px; }
-      `;
+      const css = '.file-card { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 8px; min-width: 200px; } ' +
+                  '.file-icon { font-size: 24px; } ' +
+                  '.file-info { flex: 1; min-width: 0; } ' +
+                  '.file-name { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } ' +
+                  '.file-size { font-size: 11px; opacity: 0.7; } ' +
+                  '.file-dl-btn { text-decoration: none; color: white; font-weight: bold; padding: 4px 8px; background: #2a7cff; border-radius: 4px; font-size: 12px; }';
       const style = document.createElement('style');
       style.textContent = css;
       document.head.appendChild(style);
@@ -42,6 +40,40 @@ export function init() {
       bind('btnToggleLog', () => {
         const el = document.getElementById('miniLog');
         if (el) el.style.display = (el.style.display === 'flex') ? 'none' : 'flex';
+      });
+      
+      // 日志长按全选
+      const logEl = document.getElementById('logContent');
+      if (logEl) {
+          logEl.addEventListener('contextmenu', (e) => {
+              // e.preventDefault(); // 允许系统菜单弹出
+              const selection = window.getSelection();
+              const range = document.createRange();
+              range.selectNodeContents(logEl);
+              selection.removeAllRanges();
+              selection.addRange(range);
+              // window.util.log('📋 日志已全选');
+          });
+      }
+      
+      // 下载日志 (修复)
+      bind('btnDlLog', () => {
+        const el = document.getElementById('logContent');
+        if (!el) return;
+        const text = (window.logSystem && window.logSystem.fullHistory) 
+          ? window.logSystem.fullHistory.join('\n') 
+          : 'Log Error';
+          
+        const blob = new Blob([text], {type: 'text/plain'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        // 使用纯字符串拼接，绝对兼容
+        a.download = 'p1_log_' + new Date().toISOString().slice(0,19).replace(/T/g,'_').replace(/:/g,'-') + '.txt';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
       });
 
       // 设置面板
@@ -75,7 +107,7 @@ export function init() {
             window.protocol.sendMsg(b64, CHAT.KIND_IMAGE);
           } else {
             // 处理通用文件
-            window.util.log(`准备发送文件: ${file.name} (${(file.size/1024).toFixed(1)}KB)`);
+            window.util.log('准备发送文件: ' + file.name + ' (' + (file.size/1024).toFixed(1) + 'KB)');
             
             if (file.size > 5 * 1024 * 1024) {
                alert('文件过大，建议小于 5MB');
@@ -99,7 +131,7 @@ export function init() {
       }
 
       // 返回按钮
-      bind('btnBack', () => document.getElementById('sidebar').classList.remove('hidden'));
+      bind('btnBack', () => { window.state.activeChat = null; document.getElementById('sidebar').classList.remove('hidden'); const log = document.getElementById('miniLog'); if(log) log.style.display = 'none'; });
 
       // 聊天切换
       const contactListEl = document.getElementById('contactList');
@@ -138,7 +170,7 @@ export function init() {
 
          el.addEventListener('contextmenu', (e) => {
             // 修正：移除 preventDefault，允许系统菜单弹出
-            // e.preventDefault(); 
+            // // e.preventDefault(); // 允许系统菜单弹出 
             
             // 执行编程全选
             const selection = window.getSelection();

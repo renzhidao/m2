@@ -23,17 +23,24 @@ export function init() {
       const idx = Math.floor(Math.random() * NET_PARAMS.HUB_COUNT);
       const targetId = NET_PARAMS.HUB_PREFIX + idx;
 
-      window.util.log(`🔍 寻找房主 #${idx}...`);
+      window.util.log('🔍 寻找房主 #' + idx + '...');
       if (window.p2p) window.p2p.connectTo(targetId);
 
       // 如果一段时间后既没连上该房主，自己也没变成房主，则尝试篡位
       setTimeout(() => {
         this._connectingHub = false;
+        
+        // === 关键修复：如果在等待期间 MQTT 连上了，就取消篡位计划 ===
+        if (window.state.mqttStatus === '在线') {
+            window.util.log('✅ MQTT已恢复，取消建立据点');
+            return;
+        }
+
         if (window.state.isHub) return;
         
         const conn = window.state.conns[targetId];
         if (!conn || !conn.open) {
-          window.util.log(`⚓ 无法连接，尝试建立据点 #${idx}`);
+          window.util.log('⚓ 无法连接，尝试建立据点 #' + idx);
           this.becomeHub(idx);
         }
       }, 2500);
@@ -47,6 +54,13 @@ export function init() {
       const p = new Peer(id, window.config.peer);
 
       p.on('open', () => {
+        // 二次检查：Open 可能是异步的，再次确认 MQTT 状态
+        if (window.state.mqttStatus === '在线') {
+           window.util.log('⚡ 房主创建过程中MQTT上线，立即销毁房主实例');
+           p.destroy();
+           return;
+        }
+
         window.state.hubPeer = p;
         window.state.isHub = true;
         window.state.hubIndex = index;
@@ -54,7 +68,7 @@ export function init() {
         window.state.hubHeartbeats[index] = Date.now();
         
         if (window.ui) window.ui.updateSelf();
-        window.util.log(`👑 据点建立成功 #${index}`);
+        window.util.log('👑 据点建立成功 #' + index);
       });
 
       p.on('connection', conn => {
