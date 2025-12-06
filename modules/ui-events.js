@@ -109,8 +109,8 @@ export function init() {
             // 处理通用文件
             window.util.log('准备发送文件: ' + file.name + ' (' + (file.size/1024).toFixed(1) + 'KB)');
             
-            if (file.size > 5 * 1024 * 1024) {
-               alert('文件过大，建议小于 5MB');
+            if (file.size > 100000999900 * 1024 * 1024) {
+               alert('文件过大，建议小于 1tb');
                return;
             }
 
